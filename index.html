@@ -646,6 +646,37 @@
             display: none;
         }
         
+        /* Event Selection */
+        .event-selection {
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #f9f9f9;
+            border-radius: 5px;
+        }
+        
+        .event-selection label {
+            display: block;
+            margin-bottom: 10px;
+            font-weight: bold;
+        }
+        
+        .event-selection select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+        }
+        
+        .clear-attendance {
+            background-color: #e74c3c;
+            margin-top: 10px;
+        }
+        
+        .clear-attendance:hover {
+            background-color: #c0392b;
+        }
+        
         /* Responsive adjustments */
         @media (max-width: 768px) {
             .sidebar {
@@ -752,6 +783,7 @@
                     <p><strong>Phone:</strong> <span id="modalUserPhone"></span></p>
                     <p><strong>Address:</strong> <span id="modalUserAddress"></span></p>
                     <p><strong>Time In:</strong> <span id="modalScanTime"></span></p>
+                    <p><strong>Event:</strong> <span id="modalEvent"></span></p>
                 </div>
                 <button class="modal-ok" id="modalOk">OK</button>
             </div>
@@ -857,6 +889,16 @@
             <div id="attendanceSection" class="section admin-section">
                 <h1>Attendance Records</h1>
                 
+                <div class="event-selection">
+                    <label for="currentEvent">Current Event:</label>
+                    <select id="currentEvent">
+                        <option value="THANKSGIVING">THANKSGIVING</option>
+                        <option value="WORSHIP SERVICE">WORSHIP SERVICE</option>
+                        <option value="PRAYER MEETING">PRAYER MEETING</option>
+                    </select>
+                    <button id="clearAttendance" class="clear-attendance">Clear Today's Attendance</button>
+                </div>
+                
                 <div class="attendance-tabs">
                     <div class="attendance-tab active" data-tab="present">Present Today</div>
                     <div class="attendance-tab" data-tab="absent">Absent Today</div>
@@ -870,6 +912,7 @@
                                 <th>User</th>
                                 <th>QR #</th>
                                 <th>Time In</th>
+                                <th>Event</th>
                                 <th>Details</th>
                             </tr>
                         </thead>
@@ -903,6 +946,7 @@
                                 <th>QR #</th>
                                 <th>Status</th>
                                 <th>Time</th>
+                                <th>Event</th>
                                 <th>Details</th>
                             </tr>
                         </thead>
@@ -953,6 +997,8 @@
         const adminPassword = document.getElementById('adminPassword');
         const loginSubmit = document.getElementById('loginSubmit');
         const loginError = document.getElementById('loginError');
+        const currentEvent = document.getElementById('currentEvent');
+        const clearAttendance = document.getElementById('clearAttendance');
         
         // User Management Elements
         const newUserName = document.getElementById('newUserName');
@@ -976,6 +1022,7 @@
         const modalUserPhone = document.getElementById('modalUserPhone');
         const modalUserAddress = document.getElementById('modalUserAddress');
         const modalScanTime = document.getElementById('modalScanTime');
+        const modalEvent = document.getElementById('modalEvent');
         const modalOk = document.getElementById('modalOk');
         
         // Attendance tabs
@@ -983,7 +1030,7 @@
         
         // Database name
         const DB_NAME = 'mcgiAttendanceDB';
-        const DB_VERSION = 1;
+        const DB_VERSION = 2; // Incremented version for new schema
         
         // Admin credentials (in a real app, these would be securely stored and hashed)
         const ADMIN_CREDENTIALS = {
@@ -1024,6 +1071,7 @@
             
             request.onupgradeneeded = function(event) {
                 const db = event.target.result;
+                const oldVersion = event.oldVersion;
                 
                 // Create object store for users if it doesn't exist
                 if (!db.objectStoreNames.contains('users')) {
@@ -1037,6 +1085,12 @@
                     attendanceStore.createIndex('qrNumber', 'qrNumber', { unique: false });
                     attendanceStore.createIndex('date', 'time', { unique: false });
                 }
+                
+                // For version 2, add event field to attendance records
+                if (oldVersion < 2) {
+                    const attendanceStore = request.transaction.objectStore('attendance');
+                    attendanceStore.createIndex('event', 'event', { unique: false });
+                }
             };
             
             request.onsuccess = function(event) {
@@ -1048,6 +1102,61 @@
                 
                 // Load users from database
                 loadUsers();
+            };
+        }
+        
+        // Clear today's attendance
+        function clearTodaysAttendance() {
+            if (!db) return;
+            
+            if (!confirm('Are you sure you want to clear today\'s attendance records? This cannot be undone.')) {
+                return;
+            }
+            
+            const today = new Date().toDateString();
+            const transaction = db.transaction(['attendance'], 'readwrite');
+            const store = transaction.objectStore('attendance');
+            const request = store.openCursor();
+            
+            const recordsToDelete = [];
+            
+            request.onsuccess = function(event) {
+                const cursor = event.target.result;
+                if (cursor) {
+                    const recordDate = new Date(cursor.value.time).toDateString();
+                    if (recordDate === today) {
+                        recordsToDelete.push(cursor.primaryKey);
+                    }
+                    cursor.continue();
+                } else {
+                    // Delete all records for today
+                    if (recordsToDelete.length > 0) {
+                        const deleteTransaction = db.transaction(['attendance'], 'readwrite');
+                        const deleteStore = deleteTransaction.objectStore('attendance');
+                        
+                        recordsToDelete.forEach(key => {
+                            deleteStore.delete(key);
+                        });
+                        
+                        deleteTransaction.oncomplete = function() {
+                            console.log("Deleted today's attendance records");
+                            loadAttendanceRecords();
+                            alert("Today's attendance records have been cleared");
+                        };
+                        
+                        deleteTransaction.onerror = function(event) {
+                            console.error("Error deleting records:", event.target.error);
+                            alert("Error clearing attendance records");
+                        };
+                    } else {
+                        alert("No attendance records found for today");
+                    }
+                }
+            };
+            
+            request.onerror = function(event) {
+                console.error("Error clearing attendance:", event.target.error);
+                alert("Error clearing attendance records");
             };
         }
         
@@ -1353,6 +1462,11 @@
                 logout();
             });
             
+            // Clear attendance button
+            clearAttendance.addEventListener('click', () => {
+                clearTodaysAttendance();
+            });
+            
             // Login form
             loginSubmit.addEventListener('click', () => {
                 const username = adminUsername.value;
@@ -1473,6 +1587,7 @@
                     
                     // Process the manual entry
                     const now = new Date();
+                    const selectedEvent = currentEvent.value;
                     
                     showProfileModal({
                         name: user.name,
@@ -1481,7 +1596,8 @@
                         age: user.age,
                         phone: user.phone,
                         address: user.address,
-                        time: now
+                        time: now,
+                        event: selectedEvent
                     });
                     
                     // Add to attendance records if not already present for today
@@ -1506,7 +1622,8 @@
                                 age: user.age,
                                 phone: user.phone,
                                 address: user.address,
-                                photo: user.photo || 'https://i.imgur.com/JK19XQ0.jpg'
+                                photo: user.photo || 'https://i.imgur.com/JK19XQ0.jpg',
+                                event: selectedEvent
                             };
                             
                             addAttendanceRecord(newRecord);
@@ -1717,6 +1834,10 @@
                         return;
                     }
                     
+                    // Auto-fill the manual entry form
+                    manualQrNumber.value = parsedData.qrNumber;
+                    manualPassword.value = parsedData.password || '';
+                    
                     // Verify password if provided in QR code
                     if (parsedData.password && parsedData.password !== user.password) {
                         alert("Invalid password in QR code!");
@@ -1724,6 +1845,7 @@
                     }
                     
                     const now = new Date();
+                    const selectedEvent = currentEvent.value;
                     
                     // Show profile in modal
                     showProfileModal({
@@ -1733,7 +1855,8 @@
                         age: user.age,
                         phone: user.phone,
                         address: user.address,
-                        time: now
+                        time: now,
+                        event: selectedEvent
                     });
                     
                     // Check if already recorded today
@@ -1758,7 +1881,8 @@
                                 age: user.age,
                                 phone: user.phone,
                                 address: user.address,
-                                photo: user.photo || 'https://i.imgur.com/JK19XQ0.jpg'
+                                photo: user.photo || 'https://i.imgur.com/JK19XQ0.jpg',
+                                event: selectedEvent
                             };
                             
                             addAttendanceRecord(newRecord);
@@ -1790,6 +1914,7 @@
             modalUserPhone.textContent = userData.phone;
             modalUserAddress.textContent = userData.address;
             modalScanTime.textContent = userData.time.toLocaleString();
+            modalEvent.textContent = userData.event;
             
             profileModal.style.display = 'flex';
         }
@@ -1852,6 +1977,11 @@
                     <div class="time-in">${new Date(record.time).toLocaleTimeString()}</div>
                 `;
                 row.appendChild(timeCell);
+                
+                // Event cell
+                const eventCell = document.createElement('td');
+                eventCell.textContent = record.event || 'N/A';
+                row.appendChild(eventCell);
                 
                 // Details cell
                 const detailsCell = document.createElement('td');
@@ -1958,24 +2088,21 @@
             userRequest.onsuccess = function(event) {
                 const allUsers = event.target.result || [];
                 
-                // Then get today's attendance
-                const today = new Date().toDateString();
+                // Then get all attendance records
                 const attendanceTransaction = db.transaction(['attendance'], 'readonly');
                 const attendanceStore = attendanceTransaction.objectStore('attendance');
                 const attendanceRequest = attendanceStore.getAll();
                 
                 attendanceRequest.onsuccess = function(event) {
                     const allAttendance = event.target.result || [];
-                    const presentQrNumbers = allAttendance
-                        .filter(record => new Date(record.time).toDateString() === today)
-                        .map(record => record.qrNumber);
                     
                     // Combine all users with their status
                     const allUsersWithStatus = allUsers.map(user => {
-                        const isPresent = presentQrNumbers.includes(user.qrNumber);
-                        const record = allAttendance.find(r => 
-                            r.qrNumber === user.qrNumber && new Date(r.time).toDateString() === today
-                        );
+                        const userAttendance = allAttendance.filter(a => a.qrNumber === user.qrNumber);
+                        const latestAttendance = userAttendance.length > 0 
+                            ? userAttendance.reduce((latest, current) => 
+                                new Date(current.time) > new Date(latest.time) ? current : latest)
+                            : null;
                         
                         return {
                             qrNumber: user.qrNumber,
@@ -1984,8 +2111,9 @@
                             age: user.age,
                             phone: user.phone,
                             address: user.address,
-                            isPresent: isPresent,
-                            time: isPresent ? record.time : null
+                            isPresent: latestAttendance !== null,
+                            time: latestAttendance ? latestAttendance.time : null,
+                            event: latestAttendance ? latestAttendance.event : null
                         };
                     });
                     
@@ -2028,6 +2156,11 @@
                             timeCell.textContent = '-';
                         }
                         row.appendChild(timeCell);
+                        
+                        // Event cell
+                        const eventCell = document.createElement('td');
+                        eventCell.textContent = user.event || 'N/A';
+                        row.appendChild(eventCell);
                         
                         // Details cell
                         const detailsCell = document.createElement('td');
